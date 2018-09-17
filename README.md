@@ -1,2 +1,2 @@
 # progressive_gan
-Progressive Growth of GANS
+Progressive Growing of GANS
