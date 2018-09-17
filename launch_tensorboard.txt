@@ -1,0 +1,3 @@
+@echo off
+cls
+python -m tensorboard.main --logdir ./ --host 127.0.0.1 --port 6006
