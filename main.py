@@ -136,11 +136,16 @@ def train_step(cfg, resolution, restore_dir, store_dir):
         train_ops,[g_loss, d_loss],[g_optimizer, d_optimizer] = model_fn(features, labels, 'TRAIN', cfg)
         global_step = tf.train.get_or_create_global_step()        
         summary = tf.summary.merge_all()
+        if global_step_value == 0:
+            utils.print_layers('Generator')
+            utils.print_layers('Discriminator')
         with tf.Session() as sess:                   
             sess.run(tf.global_variables_initializer())
             utils.restore(sess, restore_dir)
             saver = tf.train.Saver(name='main_saver')
             if restore_dir != store_dir and restore_dir is not None:
+                utils.print_layers('Generator')
+                utils.print_layers('Discriminator')
                 utils.reset_resolution_step()                
                 sess.run(tf.variables_initializer(d_optimizer.variables()))
                 sess.run(tf.variables_initializer(g_optimizer.variables()))
@@ -239,7 +244,7 @@ if __name__ == "__main__":
                         help="If should report histograms")
 
     # Model hyperparams:
-    parser.add_argument("--noise_dim", type=int, default=256,
+    parser.add_argument("--noise_dim", type=int, default=512,
                         help="Noise dimension")
     parser.add_argument("--starting_resolution", type=int, default=8,
                         help="Starting resolution")

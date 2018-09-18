@@ -106,3 +106,26 @@ def reset_resolution_step(sess=None):
     resolution_step_tensor = get_or_create_resolution_step(sess.graph)
     op = tf.assign(resolution_step_tensor, 0)
     sess.run(op)
+
+def print_layers(scope, hide_layers_with_no_params=False):    
+    
+    def to_list(shape):
+        return [dim.value for dim in shape]
+
+    print ()
+    print (scope, ' ---> ')
+    print ()    
+    total_params = 0
+    for v in tf.trainable_variables():
+        name = v.name
+        if scope in v.name:            
+            name = name.replace(scope+'/', '')
+            name = name.replace(':0', '')
+            print ('%-32s' % name, v.shape)
+            prod = 1
+            for dim in v.shape:                
+                prod *= dim
+            total_params += prod
+    print ()
+    print ('<--- Total Parameters: ', total_params)
+    print ()
