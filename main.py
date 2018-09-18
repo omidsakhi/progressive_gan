@@ -1,4 +1,4 @@
-import os
+import os, time
 from os import path
 import tensorflow as tf
 from tensorflow.contrib.tpu.python.tpu import tpu_config  # pylint: disable=E0611
@@ -7,10 +7,7 @@ from tensorflow.contrib.tpu.python.tpu import tpu_optimizer  # pylint: disable=E
 from tensorflow.python.estimator import estimator  # pylint: disable=E0611
 from tensorboard.plugins.beholder import Beholder
 from tensorboard.plugins.beholder import BeholderHook
-import input_pipelines
-import utils
-import models
-import ops
+import input_pipelines, utils, models, ops
 
 DRY_RUN = False
 
@@ -31,25 +28,24 @@ def model_fn(features, labels, mode, cfg):
         random_noise = features['random_noise'] * cfg.temperature       
         return models.generator(random_noise, resolution, cfg, is_training=False)
     
-    real_images = features['real_images']
+    real_images_1 = features['real_images']
+    real_images_2 = tf.image.flip_left_right(real_images_1)
 
-    random_noise_1 = features['random_noise_1']
-    random_noise_2 = features['random_noise_2']
+    random_noise_1 = features['random_noise_1']    
     
-    fake_images_out_1 = models.generator(random_noise_1, resolution, cfg, is_training=True)
-    fake_images_out_2 = models.generator(random_noise_2, resolution, cfg, is_training=True)    
+    fake_images_out_1 = models.generator(random_noise_1, resolution, cfg, is_training=True)    
         
-    real_scores_out = models.discriminator(real_images, resolution, cfg)
+    real_scores_out = models.discriminator(real_images_1, resolution, cfg)
     fake_scores_out = models.discriminator(fake_images_out_1, resolution, cfg)
-    fake_scores_out_g = models.discriminator(fake_images_out_2, resolution, cfg)
+    #fake_scores_out_g = models.discriminator(fake_images_out_2, resolution, cfg)
 
-    with tf.name_scope('Loss'):
+    with tf.name_scope('Penalties'):
         d_loss = fake_scores_out - real_scores_out
-        g_loss = -1.0 * fake_scores_out_g + 10.0 * tf.reduce_mean(tf.maximum(tf.square(fake_images_out_1), 1.0) - 1.0, axis=[1,2,3])
+        g_loss = -1.0 * fake_scores_out
 
         with tf.name_scope('GradientPenalty'):
-            mixing_factors = tf.random_uniform([int(real_images.get_shape()[0]), 1, 1, 1], 0.0, 1.0, dtype=fake_images_out_1.dtype)
-            mixed_images_out = ops.lerp(tf.cast(real_images, fake_images_out_1.dtype), fake_images_out_1, mixing_factors)
+            mixing_factors = tf.random_uniform([int(real_images_1.get_shape()[0]), 1, 1, 1], 0.0, 1.0, dtype=fake_images_out_1.dtype)
+            mixed_images_out = ops.lerp(real_images_1, real_images_2, mixing_factors)
             mixed_scores_out = models.discriminator(mixed_images_out, resolution, cfg)
             mixed_loss = tf.reduce_sum(mixed_scores_out)
             mixed_grads = tf.gradients(mixed_loss, [mixed_images_out])[0]
@@ -69,15 +65,14 @@ def model_fn(features, labels, mode, cfg):
 
     if cfg.data_format == 'NCHW':
         fake_images_out_1 = utils.nchw_to_nhwc(fake_images_out_1)
-        real_images = utils.nchw_to_nhwc(real_images)
+        real_images_1 = utils.nchw_to_nhwc(real_images_1)
+        real_images_2 = utils.nchw_to_nhwc(real_images_2)
         mixed_images_out = utils.nchw_to_nhwc(mixed_images_out)
     tf.summary.image('generated_images', fake_images_out_1)
-    tf.summary.image('real_images', real_images)
+    tf.summary.image('real_images_1', real_images_1)
+    tf.summary.image('real_images_2', real_images_2)
     tf.summary.image('mixed_images', mixed_images_out)
-    with tf.variable_scope("Images"):        
-        tf.summary.scalar('fake_min', tf.reduce_min(fake_images_out_1))
-        tf.summary.scalar('fake_max', tf.reduce_max(fake_images_out_1))
-    with tf.variable_scope("Loss"):        
+    with tf.variable_scope("Loss"):
         tf.summary.scalar('real_scores_out', tf.reduce_mean(real_scores_out))
         tf.summary.scalar('fake_scores_out', tf.reduce_mean(fake_scores_out))
         tf.summary.scalar('epsilon_penalty', tf.reduce_mean(epsilon_penalty))
@@ -88,26 +83,27 @@ def model_fn(features, labels, mode, cfg):
     g_loss = tf.reduce_mean(g_loss)
     d_loss = tf.reduce_mean(d_loss)
 
-    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-        d_step = d_optimizer.minimize(
-            d_loss,
-            var_list=tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
-                                        scope='Discriminator'))
-        g_step = g_optimizer.minimize(
-            g_loss,
-            var_list=tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
-                                        scope='Generator'))
-        with tf.control_dependencies([g_step, d_step]):       
-            increment_global_step = tf.assign_add(
-                tf.train.get_or_create_global_step(), 1)
-            increment_resolution_step = tf.assign_add(
-                utils.get_or_create_resolution_step(), 1)
-        if resolution>=cfg.starting_resolution * 2:
-            with tf.control_dependencies([increment_global_step, increment_resolution_step]):
-                lerp_ops = lerp_update_ops(resolution, fadein_rate)          
-                joint_op = tf.group([d_step, g_step, lerp_ops[0], lerp_ops[1], increment_global_step, increment_resolution_step])
-        else:
-            joint_op = tf.group([d_step, g_step, increment_global_step, increment_resolution_step])
+    with tf.name_scope('TrainOps'):
+        with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+            d_step = d_optimizer.minimize(
+                d_loss,
+                var_list=tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
+                                            scope='Discriminator'))
+            g_step = g_optimizer.minimize(
+                g_loss,
+                var_list=tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
+                                            scope='Generator'))
+            with tf.control_dependencies([g_step, d_step]):       
+                increment_global_step = tf.assign_add(
+                    tf.train.get_or_create_global_step(), 1)
+                increment_resolution_step = tf.assign_add(
+                    utils.get_or_create_resolution_step(), 1)
+            if resolution>=cfg.starting_resolution * 2:
+                with tf.control_dependencies([increment_global_step, increment_resolution_step]):
+                    lerp_ops = lerp_update_ops(resolution, fadein_rate)          
+                    joint_op = tf.group([d_step, g_step, lerp_ops[0], lerp_ops[1], increment_global_step, increment_resolution_step])
+            else:
+                joint_op = tf.group([d_step, g_step, increment_global_step, increment_resolution_step])
     return joint_op, [g_loss, d_loss], [g_optimizer, d_optimizer]
 
 def generate_step(cfg, resolution):
@@ -151,25 +147,31 @@ def train_step(cfg, resolution, restore_dir, store_dir):
                 saver.save(sess, ckpt_file, global_step = global_step)
             resolution_summary_writer = tf.summary.FileWriter(store_dir, sess.graph)            
             local_step = 0
+            start_time = time.time()
             while local_step < cfg.train_steps_before_eval:                        
-                if local_step % cfg.iterations_per_loop == 0:            
-                    _, g_loss_value, d_loss_value = sess.run([train_ops, g_loss, d_loss])
-                    global_step_value = global_step.eval(sess) - 1
-                    tf.logging.info('Step %d - g_loss %f, d_loss %f' % (global_step_value, g_loss_value, d_loss_value))
+                if local_step % cfg.iterations_per_loop == 0:                                
+                    g_loss_value, d_loss_value, global_step_value = sess.run([g_loss, d_loss, global_step])                    
+                    sess.run(train_ops)
+                    if global_step_value == 0:
+                        elapsed_time = 0
+                    else:
+                        elapsed_time = time.time() - start_time
+                        start_time = time.time()
+                    tf.logging.info('Step %d - g_loss %f, d_loss %f, Sec/Step %f' % (global_step_value, g_loss_value, d_loss_value, elapsed_time / cfg.iterations_per_loop))
                     summary_str = sess.run(summary)
                     resolution_summary_writer.add_summary(summary_str, global_step_value)
                     resolution_summary_writer.flush()
-                else:
+                else:                    
                     sess.run(train_ops)
                 local_step += 1
                 if global_step % cfg.resolution_steps == 0 and resolution != cfg.maximum_resolution:
-                    break
-            global_step_value = global_step.eval()
+                    break                        
             summary_str = sess.run(summary)
+            global_step_value = global_step.eval()
             resolution_summary_writer.add_summary(summary_str, global_step_value)
             resolution_summary_writer.flush()
             tf.logging.info('Saving parameters to %s' % (ckpt_file))            
-            saver.save(sess, ckpt_file, global_step = global_step)            
+            saver.save(sess, ckpt_file, global_step = global_step)                        
     tf.reset_default_graph()
     return global_step_value
 
@@ -264,12 +266,12 @@ if __name__ == "__main__":
         128: 64
     }
     cfg.resolution_to_batch_size = {
-        4: 64,
-        8: 64,
-        16: 64,
+        4: 128,
+        8: 128,
+        16: 128,
         32: 64,
         64: 64,
-        128: 16
+        128: 32
     }
 
     os.environ['TF_CPP_MIN_VLOG_LEVEL'] = '1'
