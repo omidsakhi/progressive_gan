@@ -70,9 +70,9 @@ class TrainInputFunction(object):
         dataset = dataset.prefetch(tf.contrib.data.AUTOTUNE)
         images, labels = dataset.make_one_shot_iterator().get_next()
         images = tf.reshape(images, [batch_size, self.resolution, self.resolution, 3])
-        if self.data_format == 'NCHW':
-            images = tf.transpose(images, [0, 3, 1, 2])
         images = tf.image.random_flip_left_right(images)
+        if self.data_format == 'NCHW':
+            images = tf.transpose(images, [0, 3, 1, 2])        
         random_noise_1 = tf.random_normal([batch_size, self.noise_dim])
         random_noise_2 = tf.random_normal([batch_size, self.noise_dim])
         features = {
