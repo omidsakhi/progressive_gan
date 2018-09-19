@@ -109,9 +109,6 @@ def reset_resolution_step(sess=None):
 
 def print_layers(scope, hide_layers_with_no_params=False):    
     
-    def to_list(shape):
-        return [dim.value for dim in shape]
-
     print ()
     print (scope, ' ---> ')
     print ()    
