@@ -1,4 +1,5 @@
 import os, time
+from tqdm import trange
 from os import path
 import tensorflow as tf
 from tensorflow.contrib.tpu.python.tpu import tpu_config  # pylint: disable=E0611
@@ -136,13 +137,14 @@ def train_step(cfg, resolution, restore_dir, store_dir):
         train_ops,[g_loss, d_loss],[g_optimizer, d_optimizer] = model_fn(features, labels, 'TRAIN', cfg)
         global_step = tf.train.get_or_create_global_step()        
         summary = tf.summary.merge_all()
-        if global_step_value == 0:
-            utils.print_layers('Generator')
-            utils.print_layers('Discriminator')
-        with tf.Session() as sess:                   
+        with tf.Session() as sess:                          
             sess.run(tf.global_variables_initializer())
             utils.restore(sess, restore_dir)
             saver = tf.train.Saver(name='main_saver')
+            global_step_value = global_step.eval()
+            if global_step_value == 0:
+                utils.print_layers('Generator')
+                utils.print_layers('Discriminator')
             if restore_dir != store_dir and restore_dir is not None:
                 utils.print_layers('Generator')
                 utils.print_layers('Discriminator')
@@ -150,31 +152,23 @@ def train_step(cfg, resolution, restore_dir, store_dir):
                 sess.run(tf.variables_initializer(d_optimizer.variables()))
                 sess.run(tf.variables_initializer(g_optimizer.variables()))
                 saver.save(sess, ckpt_file, global_step = global_step)
-            resolution_summary_writer = tf.summary.FileWriter(store_dir, sess.graph)            
-            local_step = 0
-            start_time = time.time()
-            while local_step < cfg.train_steps_before_eval:                        
-                if local_step % cfg.iterations_per_loop == 0:                                
-                    g_loss_value, d_loss_value, global_step_value = sess.run([g_loss, d_loss, global_step])                    
+            resolution_summary_writer = tf.summary.FileWriter(store_dir, sess.graph)                        
+            start_time = time.time()            
+            for _ in range(cfg.train_steps_before_eval // cfg.iterations_per_loop):
+                start_time = time.time()
+                for _ in trange(cfg.iterations_per_loop, leave=False):
                     sess.run(train_ops)
-                    if global_step_value == 0:
-                        elapsed_time = 0
-                    else:
-                        elapsed_time = time.time() - start_time
-                        start_time = time.time()
-                    tf.logging.info('Step %d - g_loss %f, d_loss %f, Sec/Step %f' % (global_step_value, g_loss_value, d_loss_value, elapsed_time / cfg.iterations_per_loop))
-                    summary_str = sess.run(summary)
-                    resolution_summary_writer.add_summary(summary_str, global_step_value)
-                    resolution_summary_writer.flush()
-                else:                    
-                    sess.run(train_ops)
-                local_step += 1
+                    if global_step % cfg.resolution_steps == 0 and resolution != cfg.maximum_resolution:
+                        break                        
+                elapsed_time = time.time() - start_time
+                g_loss_value, d_loss_value, global_step_value = sess.run([g_loss, d_loss, global_step])                
+                tf.logging.info('Step %d - g_loss %f, d_loss %f, Sec/Step %f' % (global_step_value, g_loss_value, d_loss_value, elapsed_time / cfg.iterations_per_loop))
+                summary_str = sess.run(summary)
+                resolution_summary_writer.add_summary(summary_str, global_step_value)
+                resolution_summary_writer.flush()
                 if global_step % cfg.resolution_steps == 0 and resolution != cfg.maximum_resolution:
                     break                        
-            summary_str = sess.run(summary)
             global_step_value = global_step.eval()
-            resolution_summary_writer.add_summary(summary_str, global_step_value)
-            resolution_summary_writer.flush()
             tf.logging.info('Saving parameters to %s' % (ckpt_file))            
             saver.save(sess, ckpt_file, global_step = global_step)                        
     tf.reset_default_graph()
