@@ -15,8 +15,8 @@ def dblock(name, inputs, num_filters, data_format):
 def discriminator(x, resolution, cfg, is_training=True, scope='Discriminator'):
     assert(cfg.data_format == 'NCHW' or cfg.data_format == 'NHWC')
 
-    def rname(resoltuon):
-        return str(resolution)+'x'+str(resolution)
+    def rname(resolution):
+        return str(resolution) +'x' + str(resolution)
     def fmap(resolution):
         return cfg.resolution_to_filt_num[resolution]
 
