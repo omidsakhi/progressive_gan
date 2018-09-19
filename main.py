@@ -30,7 +30,13 @@ def model_fn(features, labels, mode, cfg):
         return models.generator(random_noise, resolution, cfg, is_training=False)
     
     real_images_1 = features['real_images']
-    real_images_2 = tf.image.flip_left_right(real_images_1)
+    if cfg.data_format == 'NCHW':
+        real_images_1 = utils.nchw_to_nhwc(real_images_1)
+        real_images_2 = tf.image.flip_left_right(real_images_1)
+        real_images_1 = utils.nhwc_to_nchw(real_images_1)
+        real_images_2 = utils.nhwc_to_nchw(real_images_2)
+    else:
+        real_images_2 = tf.image.flip_left_right(real_images_1)
 
     random_noise_1 = features['random_noise_1']    
     
@@ -244,7 +250,7 @@ if __name__ == "__main__":
                         help="Starting resolution")
     parser.add_argument("--maximum_resolution", type=int, default=128,
                         help="Maximum resolution")
-    parser.add_argument("--data_format", type=str, default='NCHW',
+    parser.add_argument("--data_format", type=str, default='NHWC',
                         help="Either NCHW or NHWC")
 
     # dataset
